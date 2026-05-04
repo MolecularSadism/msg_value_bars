@@ -1,0 +1,38 @@
+[package]
+name = "msg_value_bars"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Pixel-perfect circular value bars (rings, sectors) for Bevy with fill/follow lerp animations."
+repository = "https://github.com/MolecularSadism/msg_value_bars"
+documentation = "https://docs.rs/msg_value_bars"
+keywords = ["bevy", "ui", "hud", "shader", "pixel-art"]
+categories = ["game-development"]
+
+[dependencies]
+bevy = { version = "0.18", default-features = false, features = [
+    "bevy_asset",
+    "bevy_render",
+    "bevy_sprite",
+    "bevy_sprite_render",
+    "bevy_window",
+] }
+
+[dev-dependencies]
+bevy = { version = "0.18", default-features = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
+
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "black_hole"
+path = "examples/black_hole.rs"
