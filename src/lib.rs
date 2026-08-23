@@ -1,4 +1,5 @@
-//! Pixel-perfect circular value bars for Bevy.
+//! Pixel-perfect circular value bars for Bevy, plus segmented
+//! (discrete-slot) bars driven by the same value binding.
 //!
 //! Each bar is a circular ring sector defined by an inner radius, outer
 //! radius, start angle, and end angle — measured in *logical pixels* relative
@@ -30,6 +31,24 @@
 //! app.add_plugins(MinimalPlugins);
 //! app.world_mut().spawn((bar, value));
 //! ```
+//!
+//! # Segmented bars
+//!
+//! [`SegmentedBar`] shows the same 0..1 value as discrete slots instead of a
+//! ring: the plugin spawns one bare [`Segment`] child per slot and keeps its
+//! [`SegmentState`] current, while the host attaches its own visuals to the
+//! children and restyles on `Changed<Segment>` (ordered
+//! `.after(ValueBarSystems::Sync)` to see the frame's final states).
+//!
+//! ```
+//! use bevy::prelude::*;
+//! use msg_value_bars::prelude::*;
+//!
+//! let mut app = App::new();
+//! app.add_plugins(MinimalPlugins);
+//! app.world_mut()
+//!     .spawn((SegmentedBar::new(5), CircularBarValue::new(0.6)));
+//! ```
 
 mod material;
 mod segmented;
@@ -52,7 +71,8 @@ pub mod prelude {
 /// `Sync`).
 #[derive(SystemSet, Clone, Hash, PartialEq, Eq, Debug)]
 pub enum ValueBarSystems {
-    /// Spawns the UI node + material for newly-added bars.
+    /// Spawns the UI node + material for newly-added circular bars and the
+    /// segment children for segmented bars.
     Spawn,
     /// Lerps `displayed` toward `value`.
     Advance,
@@ -531,6 +551,11 @@ fn spawn_bar_renderer(
 fn advance_bar_value(time: Res<Time>, mut bars: Query<&mut CircularBarValue>) {
     let dt = time.delta_secs();
     for mut v in &mut bars {
+        // Skip converged bars without touching the `Mut`, so
+        // `Changed<CircularBarValue>` stays a meaningful downstream filter.
+        if v.displayed == v.value {
+            continue;
+        }
         if v.follow_speed <= 0.0 {
             v.displayed = v.value;
             continue;
@@ -675,6 +700,38 @@ mod tests {
             .unwrap();
         assert!(v.displayed > 0.0);
         assert!(v.displayed < 1.0);
+    }
+
+    #[test]
+    fn converged_value_stops_triggering_change_detection() {
+        #[derive(Resource, Default)]
+        struct ChangesSeen(usize);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<ChangesSeen>();
+        app.add_systems(
+            Update,
+            (
+                advance_bar_value,
+                |values: Query<(), Changed<CircularBarValue>>, mut seen: ResMut<ChangesSeen>| {
+                    seen.0 += values.iter().count();
+                },
+            )
+                .chain(),
+        );
+
+        app.world_mut().spawn(CircularBarValue::new(0.5));
+        app.update(); // the spawn itself counts as a change
+        app.world_mut().resource_mut::<ChangesSeen>().0 = 0;
+
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChangesSeen>().0,
+            0,
+            "a converged value must not dirty change detection every frame"
+        );
     }
 
     #[test]

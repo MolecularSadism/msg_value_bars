@@ -16,7 +16,10 @@
 //! components to the children and restyling on `Changed<Segment>` — atlas
 //! sprites, UI nodes, whatever it draws with — using
 //! [`SegmentedBar::display_index`] to place a slot under either fill
-//! direction.
+//! direction. Order restyle systems `.after(ValueBarSystems::Sync)` in
+//! `Update` (the crate exports [`ValueBarSystems`](crate::ValueBarSystems)
+//! for this) so they see the frame's final states rather than picking them
+//! up a frame late.
 
 use std::time::Duration;
 
@@ -50,20 +53,26 @@ pub enum SegmentState {
     /// Slot is in follow state (the blink phase of a partial slot; hosts may
     /// also use it for damage/recovery styling).
     Follow,
-    /// Slot is in an indeterminate/loading state. Never set by the plugin;
-    /// reserved for hosts.
+    /// Slot is in an indeterminate/loading state. Never set by the plugin,
+    /// but not preserved either: the state update stomps host-set states
+    /// (this one included) back to `Fill`/`Empty` the next time the bar's
+    /// value, configuration, or children change, so a host-set state persists
+    /// only until then.
     Indeterminate,
 }
 
 /// A segmented value bar: `slot_count` discrete slots driven by the entity's
 /// [`CircularBarValue`] (0..1, so each slot spans `1 / slot_count` of it).
 ///
-/// Spawn alongside a [`CircularBarValue`]; the plugin spawns the segment
-/// children and keeps their states current.
+/// [`CircularBarValue`] is a required component: spawning a bar without one
+/// inserts the default (zero) value. The plugin spawns the segment children
+/// and keeps their states current.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
+#[require(CircularBarValue)]
 pub struct SegmentedBar {
-    /// Number of slots.
+    /// Number of slots. May be changed on a live bar; the plugin spawns or
+    /// despawns segment children to match.
     pub slot_count: usize,
     /// Layout hint for the theming layer; see [`SegmentFillDirection`].
     pub fill_direction: SegmentFillDirection,
@@ -85,6 +94,10 @@ impl Default for SegmentedBar {
 }
 
 impl SegmentedBar {
+    /// Tolerance, as a fraction of one slot, within which a value counts as
+    /// landing exactly on a slot boundary in [`Self::slot_split`].
+    pub const BOUNDARY_EPSILON: f32 = 1e-4;
+
     /// A bar with `slot_count` slots.
     #[must_use]
     pub fn new(slot_count: usize) -> Self {
@@ -116,9 +129,9 @@ impl SegmentedBar {
 
     /// Sets the blink timing for partially-covered slots.
     #[must_use]
-    pub fn with_blink_timing(mut self, empty_ms: u64, follow_ms: u64) -> Self {
-        self.blink_empty = Duration::from_millis(empty_ms);
-        self.blink_follow = Duration::from_millis(follow_ms);
+    pub fn with_blink_timing(mut self, empty: Duration, follow: Duration) -> Self {
+        self.blink_empty = empty;
+        self.blink_follow = follow;
         self
     }
 
@@ -137,16 +150,26 @@ impl SegmentedBar {
     ///
     /// `full_slots` slots are completely covered; when `has_partial` the next
     /// slot is partially covered (and should blink). A value landing exactly
-    /// on a slot boundary has no partial slot.
+    /// on a slot boundary has no partial slot; the boundary test uses a small
+    /// epsilon ([`Self::BOUNDARY_EPSILON`], in slot units) on either side, so
+    /// f32 rounding in host math (e.g. `hp / max_hp`) landing a hair off a
+    /// boundary cannot make a conceptually-full slot blink.
     #[must_use]
     pub fn slot_split(&self, value: f32) -> (usize, bool) {
         if self.slot_count == 0 {
             return (0, false);
         }
         let units = value.clamp(0.0, 1.0) * self.slot_count as f32;
-        let full = units.floor() as usize;
-        let partial = units - full as f32;
-        (full, partial > 0.0 && full < self.slot_count)
+        let mut full = units.floor() as usize;
+        let mut partial = units - full as f32;
+        if partial > 1.0 - Self::BOUNDARY_EPSILON {
+            full += 1;
+            partial = 0.0;
+        }
+        (
+            full,
+            partial > Self::BOUNDARY_EPSILON && full < self.slot_count,
+        )
     }
 }
 
@@ -167,6 +190,8 @@ pub struct Segment {
 ///
 /// Inserted and removed by the plugin; while present, the segment's state
 /// alternates between [`SegmentState::Empty`] and [`SegmentState::Follow`].
+/// The phase durations are refreshed from the bar whenever it changes, taking
+/// effect at the next phase flip.
 #[derive(Component, Debug, Reflect)]
 #[reflect(Component)]
 pub struct SegmentBlink {
@@ -203,18 +228,28 @@ impl SegmentBlink {
     }
 }
 
-/// Marks a [`SegmentedBar`] whose segment children have been spawned.
-#[derive(Component)]
-pub(crate) struct SegmentsSpawned;
-
-/// Spawns the bare segment children of newly-added bars.
+/// Spawns and reconciles the bare segment children of bars: a newly-added
+/// bar gets one child per slot, and a later `slot_count` change spawns the
+/// missing slots and despawns the extras. Non-[`Segment`] children are left
+/// alone.
 pub(crate) fn spawn_segments(
     mut commands: Commands,
-    bars: Query<(Entity, &SegmentedBar), Without<SegmentsSpawned>>,
+    bars: Query<(Entity, &SegmentedBar, Option<&Children>), Changed<SegmentedBar>>,
+    segments: Query<&Segment>,
 ) {
-    for (entity, bar) in &bars {
-        commands.entity(entity).insert(SegmentsSpawned);
-        for index in 0..bar.slot_count {
+    for (entity, bar, children) in &bars {
+        let mut present = vec![false; bar.slot_count];
+        for child in children.into_iter().flat_map(|children| children.iter()) {
+            let Ok(segment) = segments.get(child) else {
+                continue;
+            };
+            if let Some(slot) = present.get_mut(segment.index) {
+                *slot = true;
+            } else {
+                commands.entity(child).despawn();
+            }
+        }
+        for index in (0..bar.slot_count).filter(|&index| !present[index]) {
             commands.entity(entity).with_child(Segment {
                 index,
                 state: SegmentState::Empty,
@@ -225,6 +260,10 @@ pub(crate) fn spawn_segments(
 
 /// Updates segment states from the bar's [`CircularBarValue`] and manages the
 /// partial slot's [`SegmentBlink`].
+///
+/// Writes every non-blinking slot's state as [`Fill`](SegmentState::Fill) or
+/// [`Empty`](SegmentState::Empty), stomping any host-set state (see
+/// [`SegmentState::Indeterminate`]).
 pub(crate) fn update_segment_states(
     mut commands: Commands,
     bars: Query<
@@ -235,7 +274,7 @@ pub(crate) fn update_segment_states(
             Changed<Children>,
         )>,
     >,
-    mut segments: Query<(&mut Segment, Option<&SegmentBlink>)>,
+    mut segments: Query<(&mut Segment, Option<&mut SegmentBlink>)>,
 ) {
     for (bar, value, children) in &bars {
         let (full, has_partial) = bar.slot_split(value.value);
@@ -246,12 +285,26 @@ pub(crate) fn update_segment_states(
             };
 
             let should_blink = has_partial && segment.index == full;
-            if should_blink && blink.is_none() {
-                commands
-                    .entity(child)
-                    .insert(SegmentBlink::new(bar.blink_empty, bar.blink_follow));
-            } else if !should_blink && blink.is_some() {
-                commands.entity(child).remove::<SegmentBlink>();
+            match blink {
+                Some(mut blink) if should_blink => {
+                    // Keep an already-blinking slot on the bar's current
+                    // timing; the tick system applies it at the next flip.
+                    if blink.empty_duration != bar.blink_empty {
+                        blink.empty_duration = bar.blink_empty;
+                    }
+                    if blink.follow_duration != bar.blink_follow {
+                        blink.follow_duration = bar.blink_follow;
+                    }
+                }
+                None if should_blink => {
+                    commands
+                        .entity(child)
+                        .insert(SegmentBlink::new(bar.blink_empty, bar.blink_follow));
+                }
+                Some(_) => {
+                    commands.entity(child).remove::<SegmentBlink>();
+                }
+                None => {}
             }
 
             // The blink system owns a blinking slot's state.
@@ -272,13 +325,23 @@ pub(crate) fn update_segment_states(
 
 /// Ticks partial-slot blinks and writes the phase into the segment's state,
 /// so hosts restyle blinking slots off the same `Changed<Segment>` signal.
+///
+/// Time left over when a phase ends is carried into the next phase (crossing
+/// as many phases as the frame's delta covers), so the blink frequency is
+/// independent of frame rate.
 pub(crate) fn tick_segment_blink(
     time: Res<Time>,
     mut segments: Query<(&mut Segment, &mut SegmentBlink)>,
 ) {
     for (mut segment, mut blink) in &mut segments {
-        blink.timer.tick(time.delta());
-        if blink.timer.is_finished() {
+        let mut delta = time.delta();
+        while !delta.is_zero() {
+            let remaining = blink.timer.remaining();
+            if delta < remaining {
+                blink.timer.tick(delta);
+                break;
+            }
+            delta -= remaining;
             blink.showing_empty = !blink.showing_empty;
             let next = if blink.showing_empty {
                 blink.empty_duration
@@ -286,6 +349,11 @@ pub(crate) fn tick_segment_blink(
                 blink.follow_duration
             };
             blink.timer = Timer::new(next, TimerMode::Once);
+            // An all-zero timing can never consume the delta; leave the
+            // phase wherever the flip landed.
+            if blink.empty_duration.is_zero() && blink.follow_duration.is_zero() {
+                break;
+            }
         }
         let state = blink.current_state();
         if segment.state != state {
@@ -296,6 +364,8 @@ pub(crate) fn tick_segment_blink(
 
 #[cfg(test)]
 mod tests {
+    use bevy::time::TimeUpdateStrategy;
+
     use super::*;
 
     #[test]
@@ -311,7 +381,7 @@ mod tests {
     fn builder_pattern() {
         let bar = SegmentedBar::from_values(50.0, 10.0)
             .with_fill_direction(SegmentFillDirection::Inverse)
-            .with_blink_timing(100, 200);
+            .with_blink_timing(Duration::from_millis(100), Duration::from_millis(200));
 
         assert_eq!(bar.slot_count, 5);
         assert_eq!(bar.fill_direction, SegmentFillDirection::Inverse);
@@ -347,6 +417,23 @@ mod tests {
     }
 
     #[test]
+    fn slot_split_snaps_near_boundary_values() {
+        // A value one rounding error off a boundary must not report a
+        // partial slot; boundary math is epsilon-tolerant on both sides.
+        let bar = SegmentedBar::new(4);
+        assert_eq!(bar.slot_split(0.500_001), (2, false));
+        assert_eq!(bar.slot_split(0.499_999), (2, false));
+
+        // A non-representable fraction from ordinary game math.
+        let thirds = SegmentedBar::new(3);
+        assert_eq!(thirds.slot_split(1.0 / 3.0), (1, false));
+        assert_eq!(thirds.slot_split(2.0 / 3.0), (2, false));
+
+        // Genuinely-partial values still blink.
+        assert_eq!(bar.slot_split(0.51), (2, true));
+    }
+
+    #[test]
     fn blinking_state_toggle() {
         let mut blink = SegmentBlink::new(Duration::from_millis(50), Duration::from_millis(50));
 
@@ -376,6 +463,16 @@ mod tests {
         };
         states.sort_by_key(|(index, _, _)| *index);
         states
+    }
+
+    fn segment_entity(app: &App, bar: Entity, index: usize) -> Entity {
+        let world = app.world();
+        world
+            .get::<Children>(bar)
+            .unwrap()
+            .iter()
+            .find(|&child| world.get::<Segment>(child).map(|s| s.index) == Some(index))
+            .unwrap()
     }
 
     fn test_app() -> App {
@@ -468,18 +565,157 @@ mod tests {
     }
 
     #[test]
-    fn blink_toggles_between_empty_and_follow_over_time() {
-        let mut blink = SegmentBlink::new(Duration::from_millis(50), Duration::from_millis(50));
-        let mut segment = Segment {
-            index: 0,
-            state: SegmentState::Empty,
-        };
+    fn blink_carries_overshoot_across_phases() {
+        let mut app = test_app();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+        let bar = app
+            .world_mut()
+            .spawn((SegmentedBar::new(4), CircularBarValue::new(0.625)))
+            .id();
+        app.update();
+        app.update();
 
-        // Simulate the tick logic directly across a phase boundary.
-        blink.timer.tick(Duration::from_millis(60));
-        assert!(blink.timer.is_finished());
-        blink.showing_empty = !blink.showing_empty;
-        segment.state = blink.current_state();
-        assert_eq!(segment.state, SegmentState::Follow);
+        let slot = segment_entity(&app, bar, 2);
+        assert_eq!(
+            app.world().get::<Segment>(slot).unwrap().state,
+            SegmentState::Empty,
+            "a fresh blink starts in its empty phase"
+        );
+
+        // One 120 ms frame crosses both 50 ms phases and lands 20 ms into
+        // the next empty phase: two flips, with the overshoot carried.
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            120,
+        )));
+        app.update();
+        assert_eq!(
+            app.world().get::<Segment>(slot).unwrap().state,
+            SegmentState::Empty
+        );
+        let blink = app.world().get::<SegmentBlink>(slot).unwrap();
+        assert!(blink.showing_empty);
+        assert_eq!(blink.timer.elapsed(), Duration::from_millis(20));
+
+        // A 60 ms frame finishes that phase (30 ms left) and carries the
+        // remaining 30 ms into the follow phase.
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            60,
+        )));
+        app.update();
+        assert_eq!(
+            app.world().get::<Segment>(slot).unwrap().state,
+            SegmentState::Follow
+        );
+        let blink = app.world().get::<SegmentBlink>(slot).unwrap();
+        assert_eq!(blink.timer.elapsed(), Duration::from_millis(30));
+    }
+
+    #[test]
+    fn changing_blink_timing_applies_to_a_live_blink() {
+        let mut app = test_app();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+        let bar = app
+            .world_mut()
+            .spawn((SegmentedBar::new(4), CircularBarValue::new(0.625)))
+            .id();
+        app.update();
+        app.update();
+        let slot = segment_entity(&app, bar, 2);
+
+        app.world_mut()
+            .get_mut::<SegmentedBar>(bar)
+            .unwrap()
+            .blink_follow = Duration::from_millis(200);
+        app.update();
+        let blink = app.world().get::<SegmentBlink>(slot).unwrap();
+        assert_eq!(blink.follow_duration, Duration::from_millis(200));
+
+        // Finish the 50 ms empty phase; the follow phase now runs at the new
+        // duration, so a second 60 ms frame stays mid-phase.
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            60,
+        )));
+        app.update();
+        assert_eq!(
+            app.world().get::<Segment>(slot).unwrap().state,
+            SegmentState::Follow
+        );
+        app.update();
+        assert_eq!(
+            app.world().get::<Segment>(slot).unwrap().state,
+            SegmentState::Follow
+        );
+    }
+
+    #[test]
+    fn changing_slot_count_reconciles_children() {
+        let mut app = test_app();
+        let bar = app
+            .world_mut()
+            .spawn((SegmentedBar::new(4), CircularBarValue::new(1.0)))
+            .id();
+        app.update();
+        app.update();
+        assert_eq!(
+            segment_states(&mut app, bar),
+            vec![
+                (0, SegmentState::Fill, false),
+                (1, SegmentState::Fill, false),
+                (2, SegmentState::Fill, false),
+                (3, SegmentState::Fill, false),
+            ]
+        );
+
+        // Growing spawns the missing slots; value 1.0 now spans all six.
+        app.world_mut()
+            .get_mut::<SegmentedBar>(bar)
+            .unwrap()
+            .slot_count = 6;
+        app.update();
+        app.update();
+        assert_eq!(
+            segment_states(&mut app, bar),
+            vec![
+                (0, SegmentState::Fill, false),
+                (1, SegmentState::Fill, false),
+                (2, SegmentState::Fill, false),
+                (3, SegmentState::Fill, false),
+                (4, SegmentState::Fill, false),
+                (5, SegmentState::Fill, false),
+            ]
+        );
+
+        // Shrinking despawns the extras.
+        app.world_mut()
+            .get_mut::<SegmentedBar>(bar)
+            .unwrap()
+            .slot_count = 2;
+        app.update();
+        app.update();
+        assert_eq!(
+            segment_states(&mut app, bar),
+            vec![
+                (0, SegmentState::Fill, false),
+                (1, SegmentState::Fill, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn segmented_bar_requires_a_value() {
+        let mut app = test_app();
+        let bar = app.world_mut().spawn(SegmentedBar::new(3)).id();
+        app.update();
+        app.update();
+
+        assert!(app.world().get::<CircularBarValue>(bar).is_some());
+        assert_eq!(
+            segment_states(&mut app, bar),
+            vec![
+                (0, SegmentState::Empty, false),
+                (1, SegmentState::Empty, false),
+                (2, SegmentState::Empty, false),
+            ]
+        );
     }
 }
