@@ -21,6 +21,11 @@ bevy = { version = "0.18", default-features = false, features = [
 
 [dev-dependencies]
 bevy = { version = "0.18", default-features = true }
+criterion = "0.5"
+
+[[bench]]
+name = "segmented"
+harness = false
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
