@@ -32,15 +32,17 @@
 //! ```
 
 mod material;
+mod segmented;
 
 use bevy::prelude::*;
 
 pub use material::{ValueBarMaterial, ValueBarUniforms};
+pub use segmented::{Segment, SegmentBlink, SegmentFillDirection, SegmentState, SegmentedBar};
 
 pub mod prelude {
     pub use super::{
-        BarGeometry, CircularBar, CircularBarValue, FillAxis, FrameAnchor, ValueBarPlugin,
-        ValueBarSystems,
+        BarGeometry, CircularBar, CircularBarValue, FillAxis, FrameAnchor, Segment, SegmentBlink,
+        SegmentFillDirection, SegmentState, SegmentedBar, ValueBarPlugin, ValueBarSystems,
     };
 }
 
@@ -71,14 +73,25 @@ impl Plugin for ValueBarPlugin {
             .register_type::<CircularBarValue>()
             .register_type::<BarGeometry>()
             .register_type::<FillAxis>()
-            .register_type::<FrameAnchor>();
+            .register_type::<FrameAnchor>()
+            .register_type::<SegmentedBar>()
+            .register_type::<Segment>()
+            .register_type::<SegmentBlink>()
+            .register_type::<SegmentFillDirection>()
+            .register_type::<SegmentState>();
 
         app.add_systems(
             Update,
             (
-                spawn_bar_renderer.in_set(ValueBarSystems::Spawn),
+                (spawn_bar_renderer, segmented::spawn_segments).in_set(ValueBarSystems::Spawn),
                 advance_bar_value.in_set(ValueBarSystems::Advance),
-                sync_bar_material.in_set(ValueBarSystems::Sync),
+                (
+                    sync_bar_material,
+                    segmented::update_segment_states,
+                    segmented::tick_segment_blink,
+                )
+                    .chain()
+                    .in_set(ValueBarSystems::Sync),
             )
                 .chain(),
         );
