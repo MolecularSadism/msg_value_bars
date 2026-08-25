@@ -1,0 +1,6 @@
+/target
+
+# This is a library crate; the lockfile is meaningless to downstream
+# consumers (they generate their own) and just churns on every dependency
+# bump, so it isn't committed.
+Cargo.lock
