@@ -23,7 +23,7 @@ fn bench_slot_split(c: &mut Criterion) {
 
 fn bench_display_index(c: &mut Criterion) {
     let normal = SegmentedBar::new(8);
-    let inverse = SegmentedBar::new(8).with_fill_direction(SegmentFillDirection::Inverse);
+    let inverse = SegmentedBar::new(8).with_fill_direction(FillDirection::Inverse);
     c.bench_function("display_index_both_directions_8_slots", |b| {
         b.iter(|| {
             for index in 0..8 {

@@ -34,7 +34,7 @@ use crate::CircularBarValue;
 /// [`SegmentedBar::display_index`] applies it. Slot *filling* order is always
 /// by [`Segment::index`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Reflect)]
-pub enum SegmentFillDirection {
+pub enum FillDirection {
     /// Slot 0 first: left-to-right (or top-to-bottom) layouts.
     #[default]
     Normal,
@@ -74,8 +74,8 @@ pub struct SegmentedBar {
     /// Number of slots. May be changed on a live bar; the plugin spawns or
     /// despawns segment children to match.
     pub slot_count: usize,
-    /// Layout hint for the theming layer; see [`SegmentFillDirection`].
-    pub fill_direction: SegmentFillDirection,
+    /// Layout hint for the theming layer; see [`FillDirection`].
+    pub fill_direction: FillDirection,
     /// Duration of the empty phase of a partial slot's blink.
     pub blink_empty: Duration,
     /// Duration of the follow phase of a partial slot's blink.
@@ -86,7 +86,7 @@ impl Default for SegmentedBar {
     fn default() -> Self {
         Self {
             slot_count: 5,
-            fill_direction: SegmentFillDirection::default(),
+            fill_direction: FillDirection::default(),
             blink_empty: Duration::from_millis(50),
             blink_follow: Duration::from_millis(50),
         }
@@ -122,7 +122,7 @@ impl SegmentedBar {
 
     /// Sets the fill direction.
     #[must_use]
-    pub fn with_fill_direction(mut self, fill_direction: SegmentFillDirection) -> Self {
+    pub fn with_fill_direction(mut self, fill_direction: FillDirection) -> Self {
         self.fill_direction = fill_direction;
         self
     }
@@ -136,13 +136,13 @@ impl SegmentedBar {
     }
 
     /// Where slot `index` sits in the host's layout under the bar's fill
-    /// direction: `index` itself for [`Normal`](SegmentFillDirection::Normal),
-    /// mirrored for [`Inverse`](SegmentFillDirection::Inverse).
+    /// direction: `index` itself for [`Normal`](FillDirection::Normal),
+    /// mirrored for [`Inverse`](FillDirection::Inverse).
     #[must_use]
     pub fn display_index(&self, index: usize) -> usize {
         match self.fill_direction {
-            SegmentFillDirection::Normal => index,
-            SegmentFillDirection::Inverse => self.slot_count.saturating_sub(1 + index),
+            FillDirection::Normal => index,
+            FillDirection::Inverse => self.slot_count.saturating_sub(1 + index),
         }
     }
 
@@ -194,7 +194,7 @@ pub struct Segment {
 /// effect at the next phase flip.
 #[derive(Component, Debug, Reflect)]
 #[reflect(Component)]
-pub struct SegmentBlink {
+pub struct Blink {
     /// Time left in the current phase.
     pub timer: Timer,
     /// Whether currently showing the empty phase (vs the follow phase).
@@ -205,7 +205,7 @@ pub struct SegmentBlink {
     pub follow_duration: Duration,
 }
 
-impl SegmentBlink {
+impl Blink {
     /// A blink starting in its empty phase.
     #[must_use]
     pub fn new(empty: Duration, follow: Duration) -> Self {
@@ -259,7 +259,7 @@ pub(crate) fn spawn_segments(
 }
 
 /// Updates segment states from the bar's [`CircularBarValue`] and manages the
-/// partial slot's [`SegmentBlink`].
+/// partial slot's [`Blink`].
 ///
 /// Writes every non-blinking slot's state as [`Fill`](SegmentState::Fill) or
 /// [`Empty`](SegmentState::Empty), stomping any host-set state (see
@@ -274,7 +274,7 @@ pub(crate) fn update_segment_states(
             Changed<Children>,
         )>,
     >,
-    mut segments: Query<(&mut Segment, Option<&mut SegmentBlink>)>,
+    mut segments: Query<(&mut Segment, Option<&mut Blink>)>,
 ) {
     for (bar, value, children) in &bars {
         let (full, has_partial) = bar.slot_split(value.value);
@@ -299,10 +299,10 @@ pub(crate) fn update_segment_states(
                 None if should_blink => {
                     commands
                         .entity(child)
-                        .insert(SegmentBlink::new(bar.blink_empty, bar.blink_follow));
+                        .insert(Blink::new(bar.blink_empty, bar.blink_follow));
                 }
                 Some(_) => {
-                    commands.entity(child).remove::<SegmentBlink>();
+                    commands.entity(child).remove::<Blink>();
                 }
                 None => {}
             }
@@ -329,10 +329,7 @@ pub(crate) fn update_segment_states(
 /// Time left over when a phase ends is carried into the next phase (crossing
 /// as many phases as the frame's delta covers), so the blink frequency is
 /// independent of frame rate.
-pub(crate) fn tick_segment_blink(
-    time: Res<Time>,
-    mut segments: Query<(&mut Segment, &mut SegmentBlink)>,
-) {
+pub(crate) fn tick_segment_blink(time: Res<Time>, mut segments: Query<(&mut Segment, &mut Blink)>) {
     for (mut segment, mut blink) in &mut segments {
         let mut delta = time.delta();
         while !delta.is_zero() {
@@ -380,11 +377,11 @@ mod tests {
     #[test]
     fn builder_pattern() {
         let bar = SegmentedBar::from_values(50.0, 10.0)
-            .with_fill_direction(SegmentFillDirection::Inverse)
+            .with_fill_direction(FillDirection::Inverse)
             .with_blink_timing(Duration::from_millis(100), Duration::from_millis(200));
 
         assert_eq!(bar.slot_count, 5);
-        assert_eq!(bar.fill_direction, SegmentFillDirection::Inverse);
+        assert_eq!(bar.fill_direction, FillDirection::Inverse);
         assert_eq!(bar.blink_empty, Duration::from_millis(100));
         assert_eq!(bar.blink_follow, Duration::from_millis(200));
     }
@@ -395,7 +392,7 @@ mod tests {
         assert_eq!(normal.display_index(0), 0);
         assert_eq!(normal.display_index(3), 3);
 
-        let inverse = SegmentedBar::new(4).with_fill_direction(SegmentFillDirection::Inverse);
+        let inverse = SegmentedBar::new(4).with_fill_direction(FillDirection::Inverse);
         assert_eq!(inverse.display_index(0), 3);
         assert_eq!(inverse.display_index(3), 0);
     }
@@ -435,7 +432,7 @@ mod tests {
 
     #[test]
     fn blinking_state_toggle() {
-        let mut blink = SegmentBlink::new(Duration::from_millis(50), Duration::from_millis(50));
+        let mut blink = Blink::new(Duration::from_millis(50), Duration::from_millis(50));
 
         assert!(blink.showing_empty);
         assert_eq!(blink.current_state(), SegmentState::Empty);
@@ -454,7 +451,7 @@ mod tests {
             children
                 .into_iter()
                 .filter_map(|child| {
-                    let blinking = world.get::<SegmentBlink>(child).is_some();
+                    let blinking = world.get::<Blink>(child).is_some();
                     world
                         .get::<Segment>(child)
                         .map(|s| (s.index, s.state, blinking))
@@ -592,7 +589,7 @@ mod tests {
             app.world().get::<Segment>(slot).unwrap().state,
             SegmentState::Empty
         );
-        let blink = app.world().get::<SegmentBlink>(slot).unwrap();
+        let blink = app.world().get::<Blink>(slot).unwrap();
         assert!(blink.showing_empty);
         assert_eq!(blink.timer.elapsed(), Duration::from_millis(20));
 
@@ -606,7 +603,7 @@ mod tests {
             app.world().get::<Segment>(slot).unwrap().state,
             SegmentState::Follow
         );
-        let blink = app.world().get::<SegmentBlink>(slot).unwrap();
+        let blink = app.world().get::<Blink>(slot).unwrap();
         assert_eq!(blink.timer.elapsed(), Duration::from_millis(30));
     }
 
@@ -627,7 +624,7 @@ mod tests {
             .unwrap()
             .blink_follow = Duration::from_millis(200);
         app.update();
-        let blink = app.world().get::<SegmentBlink>(slot).unwrap();
+        let blink = app.world().get::<Blink>(slot).unwrap();
         assert_eq!(blink.follow_duration, Duration::from_millis(200));
 
         // Finish the 50 ms empty phase; the follow phase now runs at the new
