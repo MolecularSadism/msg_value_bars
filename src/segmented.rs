@@ -107,15 +107,16 @@ impl SegmentedBar {
         }
     }
 
-    /// The number of slots needed to represent `max_value` at
-    /// `value_per_slot` units each — `ceil(max / per_slot)`, or 0 when
-    /// `value_per_slot` is not positive.
+    /// The number of slots needed to cover `[min, max]` at `step` units
+    /// each — `ceil((max - min) / step)`, or 0 when `step` is not positive
+    /// or the span is empty/inverted.
     #[must_use]
-    pub fn from_values(max_value: f32, value_per_slot: f32) -> Self {
-        let slot_count = if value_per_slot <= 0.0 {
+    pub fn from_range(min: f32, max: f32, step: f32) -> Self {
+        let span = max - min;
+        let slot_count = if step <= 0.0 || span <= 0.0 {
             0
         } else {
-            (max_value / value_per_slot).ceil() as usize
+            (span / step).ceil() as usize
         };
         Self::new(slot_count)
     }
@@ -366,17 +367,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slot_count_calculation() {
-        assert_eq!(SegmentedBar::from_values(100.0, 20.0).slot_count, 5);
-        assert_eq!(SegmentedBar::from_values(100.0, 25.0).slot_count, 4);
+    fn slot_count_from_range() {
+        assert_eq!(SegmentedBar::from_range(0.0, 100.0, 20.0).slot_count, 5);
+        assert_eq!(SegmentedBar::from_range(0.0, 100.0, 25.0).slot_count, 4);
         // 100/30 = 3.33, ceil = 4
-        assert_eq!(SegmentedBar::from_values(100.0, 30.0).slot_count, 4);
-        assert_eq!(SegmentedBar::from_values(100.0, 0.0).slot_count, 0);
+        assert_eq!(SegmentedBar::from_range(0.0, 100.0, 30.0).slot_count, 4);
+        assert_eq!(SegmentedBar::from_range(0.0, 100.0, 0.0).slot_count, 0);
+
+        // A range that doesn't start at zero spans just its own width.
+        assert_eq!(SegmentedBar::from_range(50.0, 150.0, 20.0).slot_count, 5);
+
+        // Empty or inverted range: no slots.
+        assert_eq!(SegmentedBar::from_range(100.0, 100.0, 20.0).slot_count, 0);
+        assert_eq!(SegmentedBar::from_range(100.0, 50.0, 20.0).slot_count, 0);
     }
 
     #[test]
     fn builder_pattern() {
-        let bar = SegmentedBar::from_values(50.0, 10.0)
+        let bar = SegmentedBar::from_range(0.0, 50.0, 10.0)
             .with_fill_direction(FillDirection::Inverse)
             .with_blink_timing(Duration::from_millis(100), Duration::from_millis(200));
 
