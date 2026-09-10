@@ -7,8 +7,8 @@
 //
 // Painting order, from outside in:
 //
-//   * Frame      — outline of the bar's full extent. Pixels just inside its
-//                  edge get painted with `frame_color` to form a margin.
+//   * Frame      — expanded outline wrapping outside the active zone.
+//                  Pixels just inside its edge get `frame_color` (margin).
 //   * Lead       — the "real" current value. Tracks the instantaneous input.
 //   * Fill       — the lagging green value. Lerps toward lead.
 //
