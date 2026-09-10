@@ -229,6 +229,42 @@ impl BarGeometry {
 }
 
 // ----------------------------------------------------------------------------
+// Frame expansion
+// ----------------------------------------------------------------------------
+
+/// Expand a geometry outward by the given margin widths so the frame wraps
+/// *outside* the active zone rather than eating into it. Radial edges grow/
+/// shrink by their margin; angular edges expand by an arc-length-equivalent
+/// angle, using the inner radius as reference (worst-case overlap radius).
+fn expand_frame_geometry(
+    geo: BarGeometry,
+    outer_margin: f32,
+    inner_margin: f32,
+    angular_margin: f32,
+) -> BarGeometry {
+    let expanded_outer = geo.outer_radius + outer_margin;
+    let expanded_inner = (geo.inner_radius - inner_margin).max(0.0);
+    let sweep = geo.end_angle - geo.start_angle;
+    if sweep >= std::f32::consts::TAU || angular_margin <= 0.0 || sweep <= 0.0 {
+        BarGeometry::new(
+            expanded_inner,
+            expanded_outer,
+            geo.start_angle,
+            geo.end_angle,
+        )
+    } else {
+        let ref_radius = geo.inner_radius.max(1.0);
+        let angular_pad = angular_margin / ref_radius;
+        BarGeometry::new(
+            expanded_inner,
+            expanded_outer,
+            geo.start_angle - angular_pad,
+            geo.end_angle + angular_pad,
+        )
+    }
+}
+
+// ----------------------------------------------------------------------------
 // Public component API
 // ----------------------------------------------------------------------------
 
@@ -432,6 +468,19 @@ impl CircularBar {
         self
     }
 
+    /// Bounding box of the bar's full frame extent including margin
+    /// expansion, floored/ceiled to integer pixels.
+    fn frame_bounds(&self) -> (Vec2, Vec2) {
+        let expanded = expand_frame_geometry(
+            self.max_geometry,
+            self.outer_margin,
+            self.inner_margin,
+            self.angular_margin,
+        );
+        let (raw_min, raw_max) = expanded.bounding_box(1.0);
+        (raw_min.floor(), raw_max.ceil())
+    }
+
     /// Compute the geometry corresponding to a normalized value in [0, 1].
     pub fn geometry_at(&self, value: f32) -> BarGeometry {
         let t = value.clamp(0.0, 1.0);
@@ -529,9 +578,7 @@ fn spawn_bar_renderer(
             uniforms: build_uniforms(bar, &value),
         });
 
-        let (bb_min_raw, bb_max_raw) = bar.max_geometry.bounding_box(1.0);
-        let bb_min = bb_min_raw.floor();
-        let bb_max = bb_max_raw.ceil();
+        let (bb_min, bb_max) = bar.frame_bounds();
         let ps = bar.pixel_size.max(1) as f32;
         commands.entity(entity).insert((
             BarRendererSpawned,
@@ -583,9 +630,7 @@ fn sync_bar_material(
         if let Some(material) = materials.get_mut(&material_handle.0) {
             material.uniforms = build_uniforms(bar, value);
         }
-        let (bb_min_raw, bb_max_raw) = bar.max_geometry.bounding_box(1.0);
-        let bb_min = bb_min_raw.floor();
-        let bb_max = bb_max_raw.ceil();
+        let (bb_min, bb_max) = bar.frame_bounds();
         let ps = bar.pixel_size.max(1) as f32;
         node.width = Val::Px((bb_max.x - bb_min.x) * ps);
         node.height = Val::Px((bb_max.y - bb_min.y) * ps);
@@ -600,10 +645,6 @@ fn color_to_vec4(c: Color) -> Vec4 {
 }
 
 fn build_uniforms(bar: &CircularBar, value: &CircularBarValue) -> ValueBarUniforms {
-    // The red "lead" is always the larger of the two values, and the green
-    // "fill" the smaller. This makes the bar visually symmetric: it works the
-    // same on the way up (fill chasing lead with red ahead) and on the way
-    // down (fill catching up with red trailing the ghost).
     let lead_t = value.value.max(value.displayed);
     let fill_t = value.value.min(value.displayed);
     let lead = bar.geometry_at(lead_t);
@@ -614,19 +655,24 @@ fn build_uniforms(bar: &CircularBar, value: &CircularBarValue) -> ValueBarUnifor
         FrameAnchor::Full => bar.max_geometry,
     };
 
-    let (bb_min_raw, bb_max_raw) = bar.max_geometry.bounding_box(1.0);
-    let bb_min = bb_min_raw.floor();
-    let bb_max = bb_max_raw.ceil();
+    let expanded_frame = expand_frame_geometry(
+        frame,
+        bar.outer_margin,
+        bar.inner_margin,
+        bar.angular_margin,
+    );
+
+    let (bb_min, bb_max) = bar.frame_bounds();
     let quad_px_size = bb_max - bb_min;
     let center = Vec2::new(-bb_min.x, -bb_min.y);
 
     ValueBarUniforms {
         quad_px_size,
         center_px: center,
-        frame_outer_radius: frame.outer_radius,
-        frame_inner_radius: frame.inner_radius,
-        frame_start_angle: frame.start_angle,
-        frame_end_angle: frame.end_angle,
+        frame_outer_radius: expanded_frame.outer_radius,
+        frame_inner_radius: expanded_frame.inner_radius,
+        frame_start_angle: expanded_frame.start_angle,
+        frame_end_angle: expanded_frame.end_angle,
         lead_outer_radius: lead.outer_radius,
         lead_inner_radius: lead.inner_radius,
         lead_start_angle: lead.start_angle,
@@ -756,5 +802,59 @@ mod tests {
             .get::<CircularBarValue>()
             .unwrap();
         approx(v.displayed, 0.7);
+    }
+
+    #[test]
+    fn frame_expands_outward_by_margins() {
+        let bar = CircularBar::sector(30.0, 20.0, 0.0, std::f32::consts::FRAC_PI_2)
+            .with_margin(1.0)
+            .with_frame_anchor(FrameAnchor::Full);
+        let value = CircularBarValue::new(0.5);
+        let uniforms = build_uniforms(&bar, &value);
+
+        approx(uniforms.frame_outer_radius, 31.0);
+        approx(uniforms.frame_inner_radius, 19.0);
+        assert!(
+            uniforms.frame_start_angle < 0.0,
+            "frame start should expand before the active zone"
+        );
+        assert!(
+            uniforms.frame_end_angle > std::f32::consts::FRAC_PI_2,
+            "frame end should expand past the active zone"
+        );
+
+        // Fill/lead stay at the original geometry, not expanded.
+        approx(uniforms.fill_outer_radius, 30.0);
+        approx(uniforms.lead_outer_radius, 30.0);
+        approx(uniforms.fill_inner_radius, 20.0);
+        approx(uniforms.lead_inner_radius, 20.0);
+    }
+
+    #[test]
+    fn full_ring_frame_skips_angular_expansion() {
+        let bar = CircularBar::ring(30.0, 20.0)
+            .with_margin(1.0)
+            .with_frame_anchor(FrameAnchor::Full);
+        let value = CircularBarValue::new(0.5);
+        let uniforms = build_uniforms(&bar, &value);
+
+        approx(uniforms.frame_outer_radius, 31.0);
+        approx(uniforms.frame_inner_radius, 19.0);
+        approx(uniforms.frame_start_angle, 0.0);
+        approx(uniforms.frame_end_angle, std::f32::consts::TAU);
+    }
+
+    #[test]
+    fn zero_margin_produces_no_expansion() {
+        let bar = CircularBar::sector(30.0, 20.0, 0.0, std::f32::consts::FRAC_PI_2)
+            .with_margin(0.0)
+            .with_frame_anchor(FrameAnchor::Full);
+        let value = CircularBarValue::new(0.5);
+        let uniforms = build_uniforms(&bar, &value);
+
+        approx(uniforms.frame_outer_radius, 30.0);
+        approx(uniforms.frame_inner_radius, 20.0);
+        approx(uniforms.frame_start_angle, 0.0);
+        approx(uniforms.frame_end_angle, std::f32::consts::FRAC_PI_2);
     }
 }

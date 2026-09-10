@@ -18,7 +18,7 @@ Each bar is a ring sector rendered entirely in a WGSL fragment shader using hard
 
 | `msg_value_bars` | Bevy |
 |------------------|------|
-| 0.1              | 0.18 |
+| 0.2              | 0.18 |
 
 ## Installation
 
@@ -26,7 +26,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-msg_value_bars = { git = "https://github.com/MolecularSadism/msg_value_bars", tag = "v0.1.0" }
+msg_value_bars = { git = "https://github.com/MolecularSadism/msg_value_bars", tag = "v0.2.0" }
 ```
 
 Then add the plugin to your app:
