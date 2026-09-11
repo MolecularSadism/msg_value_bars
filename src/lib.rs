@@ -655,13 +655,6 @@ fn build_uniforms(bar: &CircularBar, value: &CircularBarValue) -> ValueBarUnifor
         FrameAnchor::Full => bar.max_geometry,
     };
 
-    let expanded_frame = expand_frame_geometry(
-        frame,
-        bar.outer_margin,
-        bar.inner_margin,
-        bar.angular_margin,
-    );
-
     let (bb_min, bb_max) = bar.frame_bounds();
     let quad_px_size = bb_max - bb_min;
     let center = Vec2::new(-bb_min.x, -bb_min.y);
@@ -669,10 +662,10 @@ fn build_uniforms(bar: &CircularBar, value: &CircularBarValue) -> ValueBarUnifor
     ValueBarUniforms {
         quad_px_size,
         center_px: center,
-        frame_outer_radius: expanded_frame.outer_radius,
-        frame_inner_radius: expanded_frame.inner_radius,
-        frame_start_angle: expanded_frame.start_angle,
-        frame_end_angle: expanded_frame.end_angle,
+        frame_outer_radius: frame.outer_radius,
+        frame_inner_radius: frame.inner_radius,
+        frame_start_angle: frame.start_angle,
+        frame_end_angle: frame.end_angle,
         lead_outer_radius: lead.outer_radius,
         lead_inner_radius: lead.inner_radius,
         lead_start_angle: lead.start_angle,
@@ -805,47 +798,53 @@ mod tests {
     }
 
     #[test]
-    fn frame_expands_outward_by_margins() {
+    fn frame_uniforms_match_anchor_geometry() {
         let bar = CircularBar::sector(30.0, 20.0, 0.0, std::f32::consts::FRAC_PI_2)
             .with_margin(1.0)
             .with_frame_anchor(FrameAnchor::Full);
         let value = CircularBarValue::new(0.5);
         let uniforms = build_uniforms(&bar, &value);
 
-        approx(uniforms.frame_outer_radius, 31.0);
-        approx(uniforms.frame_inner_radius, 19.0);
-        assert!(
-            uniforms.frame_start_angle < 0.0,
-            "frame start should expand before the active zone"
-        );
-        assert!(
-            uniforms.frame_end_angle > std::f32::consts::FRAC_PI_2,
-            "frame end should expand past the active zone"
-        );
+        approx(uniforms.frame_outer_radius, 30.0);
+        approx(uniforms.frame_inner_radius, 20.0);
+        approx(uniforms.frame_start_angle, 0.0);
+        approx(uniforms.frame_end_angle, std::f32::consts::FRAC_PI_2);
 
-        // Fill/lead stay at the original geometry, not expanded.
-        approx(uniforms.fill_outer_radius, 30.0);
-        approx(uniforms.lead_outer_radius, 30.0);
-        approx(uniforms.fill_inner_radius, 20.0);
-        approx(uniforms.lead_inner_radius, 20.0);
+        approx(uniforms.frame_margin_outer_px, 1.0);
+        approx(uniforms.frame_margin_inner_px, 1.0);
+        approx(uniforms.frame_margin_angular_px, 1.0);
     }
 
     #[test]
-    fn full_ring_frame_skips_angular_expansion() {
+    fn frame_bounds_include_margin_expansion() {
+        let bar = CircularBar::sector(30.0, 20.0, 0.0, std::f32::consts::FRAC_PI_2)
+            .with_margin(1.0)
+            .with_frame_anchor(FrameAnchor::Full);
+        let (bb_min, bb_max) = bar.frame_bounds();
+
+        assert!(bb_min.y < -1.0, "bounds should extend past inner radius");
+        assert!(
+            bb_max.x > 31.0,
+            "bounds should extend past outer radius + margin"
+        );
+    }
+
+    #[test]
+    fn full_ring_frame_unchanged_by_margins() {
         let bar = CircularBar::ring(30.0, 20.0)
             .with_margin(1.0)
             .with_frame_anchor(FrameAnchor::Full);
         let value = CircularBarValue::new(0.5);
         let uniforms = build_uniforms(&bar, &value);
 
-        approx(uniforms.frame_outer_radius, 31.0);
-        approx(uniforms.frame_inner_radius, 19.0);
+        approx(uniforms.frame_outer_radius, 30.0);
+        approx(uniforms.frame_inner_radius, 20.0);
         approx(uniforms.frame_start_angle, 0.0);
         approx(uniforms.frame_end_angle, std::f32::consts::TAU);
     }
 
     #[test]
-    fn zero_margin_produces_no_expansion() {
+    fn zero_margin_produces_identical_frame() {
         let bar = CircularBar::sector(30.0, 20.0, 0.0, std::f32::consts::FRAC_PI_2)
             .with_margin(0.0)
             .with_frame_anchor(FrameAnchor::Full);
