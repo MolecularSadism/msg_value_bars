@@ -7,17 +7,18 @@
 //
 // Painting order, from outside in:
 //
-//   * Frame      — expanded outline wrapping outside the active zone.
-//                  Pixels just inside its edge get `frame_color` (margin).
-//   * Lead       — the "real" current value. Tracks the instantaneous input.
-//   * Fill       — the lagging green value. Lerps toward lead.
+//   * Margin      — pixels outside the frame but within margin distance of
+//                   its edges. Painted with `frame_color` to form the outline.
+//   * Frame       — the active zone whose edges the outline wraps around.
+//   * Lead        — the "real" current value. Tracks the instantaneous input.
+//   * Fill        — the lagging green value. Lerps toward lead.
 //
 // Pixels are categorized once per fragment:
-//   inside fill                       → fill_color   (green)
-//   inside lead   but outside fill    → follow_color (red gap)
-//   inside frame  but outside lead    → background   (empty body)
-//   inside margin band                → frame_color  (outline)
-//   outside frame                     → transparent  (no draw)
+//   outside clip (frame + margins)       → transparent  (no draw)
+//   outside frame but inside clip        → frame_color  (outline)
+//   inside fill                          → fill_color   (green)
+//   inside lead   but outside fill       → follow_color (red gap)
+//   inside frame  but outside lead       → background   (empty body)
 //
 // All distances are in *logical pixels*. The owner sizes the UI node in
 // those same logical pixels; `UiScale` (or any wrapping scale) then renders
@@ -34,7 +35,7 @@ struct ValueBarUniforms {
     // Center of the bar in mesh-local pixel coordinates.
     center_px: vec2<f32>,
 
-    // Frame (outline) extents.
+    // Frame (active zone) extents — the outline wraps outside these edges.
     frame_outer_radius: f32,
     frame_inner_radius: f32,
     frame_start_angle: f32,
@@ -94,17 +95,6 @@ fn in_angular_sector(angle: f32, start: f32, end: f32) -> bool {
     return wrap_angle(angle, start) <= sweep;
 }
 
-// Distance (in radians) from `angle` to the nearest sector edge, measured
-// from inside the sector. -1.0 if the sector is empty.
-fn angular_distance_to_edge(angle: f32, start: f32, end: f32) -> f32 {
-    let sweep = end - start;
-    if sweep <= 0.0 {
-        return -1.0;
-    }
-    let from_start = wrap_angle(angle, start);
-    return min(from_start, sweep - from_start);
-}
-
 fn in_ring_sector(
     r: f32,
     angle: f32,
@@ -130,11 +120,46 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     let r = length(offset);
     let angle = atan2(offset.y, offset.x);
 
+    let m_outer = bar.frame_margin_outer_px;
+    let m_inner = bar.frame_margin_inner_px;
+    let m_angular = bar.frame_margin_angular_px;
+    let frame_sweep = bar.frame_end_angle - bar.frame_start_angle;
+
     // ---------------------------------------------------------------
-    // Outside the frame: nothing to draw. The background color only
-    // fills the unoccupied portion of the frame band — never the
-    // surrounding quad — so a solid background reads as a ring, not
-    // a filled square.
+    // Clip test: the visible region is the frame geometry expanded
+    // outward by margins. Pixels outside this are transparent.
+    // ---------------------------------------------------------------
+
+    // Radial clip — expand outward by per-edge margin widths.
+    let clip_inner = bar.frame_inner_radius - m_inner;
+    let clip_outer = bar.frame_outer_radius + m_outer;
+    if r < clip_inner || r >= clip_outer {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    // Angular clip — expand each edge by the arc-length-equivalent angle
+    // at this pixel's radius so the margin stays a constant pixel width.
+    if frame_sweep <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    if frame_sweep < TAU {
+        var clip_start = bar.frame_start_angle;
+        var clip_end = bar.frame_end_angle;
+        if m_angular > 0.0 && r > 0.0 {
+            let angular_pad = m_angular / r;
+            clip_start -= angular_pad;
+            clip_end += angular_pad;
+        }
+        if !in_angular_sector(angle, clip_start, clip_end) {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Margin: pixels inside the clip but outside the original frame
+    // geometry are the outline band. The per-edge margin widths are
+    // already baked into the clip bounds, so a zero-width edge
+    // produces no expansion and no outline on that side.
     // ---------------------------------------------------------------
     let in_frame = in_ring_sector(
         r, angle,
@@ -142,42 +167,11 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
         bar.frame_start_angle, bar.frame_end_angle,
     );
     if !in_frame {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-
-    // ---------------------------------------------------------------
-    // Margin (frame outline): a 1..N pixel band hugging the frame edge.
-    // Each edge has its own width so callers can show only the outer
-    // outline (color-banded stacks), only the inner outline, etc.
-    // The arc-length conversion keeps the angular margin visually uniform
-    // around the curve, regardless of the pixel's distance from origin.
-    // ---------------------------------------------------------------
-    let m_outer = bar.frame_margin_outer_px;
-    let m_inner = bar.frame_margin_inner_px;
-    let m_angular = bar.frame_margin_angular_px;
-
-    let near_outer = m_outer > 0.0 && r >= (bar.frame_outer_radius - m_outer);
-    let near_inner = m_inner > 0.0 && r < (bar.frame_inner_radius + m_inner);
-
-    var near_angular = false;
-    if m_angular > 0.0 {
-        let frame_sweep = bar.frame_end_angle - bar.frame_start_angle;
-        if frame_sweep < TAU && r > 0.0 {
-            let arc_margin = m_angular / r;
-            let edge_dist = angular_distance_to_edge(
-                angle, bar.frame_start_angle, bar.frame_end_angle,
-            );
-            near_angular = edge_dist >= 0.0 && edge_dist < arc_margin;
-        }
-    }
-
-    if near_outer || near_inner || near_angular {
         return bar.frame_color;
     }
 
     // ---------------------------------------------------------------
-    // Fill (green) takes precedence over lead (red) takes precedence
-    // over the empty frame body.
+    // Inside the frame: fill (green) > lead (red) > background.
     // ---------------------------------------------------------------
     let in_fill = in_ring_sector(
         r, angle,
