@@ -26,7 +26,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-msg_value_bars = { git = "https://github.com/MolecularSadism/msg_value_bars", tag = "v0.2.0" }
+msg_value_bars = { git = "https://github.com/MolecularSadism/msg_value_bars", tag = "v0.2.2" }
 ```
 
 Then add the plugin to your app:
