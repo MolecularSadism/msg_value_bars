@@ -229,42 +229,6 @@ impl BarGeometry {
 }
 
 // ----------------------------------------------------------------------------
-// Frame expansion
-// ----------------------------------------------------------------------------
-
-/// Expand a geometry outward by the given margin widths so the frame wraps
-/// *outside* the active zone rather than eating into it. Radial edges grow/
-/// shrink by their margin; angular edges expand by an arc-length-equivalent
-/// angle, using the inner radius as reference (worst-case overlap radius).
-fn expand_frame_geometry(
-    geo: BarGeometry,
-    outer_margin: f32,
-    inner_margin: f32,
-    angular_margin: f32,
-) -> BarGeometry {
-    let expanded_outer = geo.outer_radius + outer_margin;
-    let expanded_inner = (geo.inner_radius - inner_margin).max(0.0);
-    let sweep = geo.end_angle - geo.start_angle;
-    if sweep >= std::f32::consts::TAU || angular_margin <= 0.0 || sweep <= 0.0 {
-        BarGeometry::new(
-            expanded_inner,
-            expanded_outer,
-            geo.start_angle,
-            geo.end_angle,
-        )
-    } else {
-        let ref_radius = geo.inner_radius.max(1.0);
-        let angular_pad = angular_margin / ref_radius;
-        BarGeometry::new(
-            expanded_inner,
-            expanded_outer,
-            geo.start_angle - angular_pad,
-            geo.end_angle + angular_pad,
-        )
-    }
-}
-
-// ----------------------------------------------------------------------------
 // Public component API
 // ----------------------------------------------------------------------------
 
@@ -468,16 +432,11 @@ impl CircularBar {
         self
     }
 
-    /// Bounding box of the bar's full frame extent including margin
-    /// expansion, floored/ceiled to integer pixels.
+    /// Bounding box of the bar's full frame extent, floored/ceiled to integer
+    /// pixels. The margin band is painted inside this extent, never beyond
+    /// it, so the node never needs to grow past the authored geometry.
     fn frame_bounds(&self) -> (Vec2, Vec2) {
-        let expanded = expand_frame_geometry(
-            self.max_geometry,
-            self.outer_margin,
-            self.inner_margin,
-            self.angular_margin,
-        );
-        let (raw_min, raw_max) = expanded.bounding_box(1.0);
+        let (raw_min, raw_max) = self.max_geometry.bounding_box(1.0);
         (raw_min.floor(), raw_max.ceil())
     }
 
@@ -816,17 +775,19 @@ mod tests {
     }
 
     #[test]
-    fn frame_bounds_include_margin_expansion() {
-        let bar = CircularBar::sector(30.0, 20.0, 0.0, std::f32::consts::FRAC_PI_2)
+    fn frame_bounds_are_unaffected_by_margins() {
+        let with_margin = CircularBar::sector(30.0, 20.0, 0.0, std::f32::consts::FRAC_PI_2)
             .with_margin(1.0)
             .with_frame_anchor(FrameAnchor::Full);
-        let (bb_min, bb_max) = bar.frame_bounds();
+        let without_margin = CircularBar::sector(30.0, 20.0, 0.0, std::f32::consts::FRAC_PI_2)
+            .with_margin(0.0)
+            .with_frame_anchor(FrameAnchor::Full);
 
-        assert!(bb_min.y < -1.0, "bounds should extend past inner radius");
-        assert!(
-            bb_max.x > 31.0,
-            "bounds should extend past outer radius + margin"
-        );
+        assert_eq!(with_margin.frame_bounds(), without_margin.frame_bounds());
+
+        let (bb_min, bb_max) = with_margin.frame_bounds();
+        assert!(bb_max.x <= 31.0, "bounds must not extend past outer radius");
+        assert!(bb_min.y >= -1.0, "bounds must not extend past inner radius");
     }
 
     #[test]
