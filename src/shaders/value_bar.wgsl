@@ -163,8 +163,15 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     let m_inner = bar.frame_margin_inner_px;
     let m_angular = bar.frame_margin_angular_px;
 
-    let near_outer = m_outer > 0.0 && r >= (bar.frame_outer_radius - m_outer);
-    let near_inner = m_inner > 0.0 && r < (bar.frame_inner_radius + m_inner);
+    // Directional cosine of the radius gradient along the dominant pixel axis.
+    // A fixed band in radius covers ~1/axis_cos output pixels, so near 45deg a
+    // 1px margin would span ~sqrt(2) px and double the staircase into L-corners.
+    // Scaling the band by it holds the outline to exactly N output pixels at
+    // every angle (pixel-perfect: single-pixel diagonal steps, no L-corners).
+    let axis_cos = max(abs(offset.x), abs(offset.y)) / max(r, 1.0);
+
+    let near_outer = m_outer > 0.0 && r >= (bar.frame_outer_radius - m_outer * axis_cos);
+    let near_inner = m_inner > 0.0 && r < (bar.frame_inner_radius + m_inner * axis_cos);
 
     var near_angular = false;
     if m_angular > 0.0 {
