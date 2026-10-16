@@ -1,8 +1,8 @@
 [package]
 name = "msg_value_bars"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 description = "Pixel-perfect circular value bars (rings, sectors) for Bevy with fill/follow lerp animations."
 repository = "https://github.com/MolecularSadism/msg_value_bars"
@@ -11,17 +11,19 @@ keywords = ["bevy", "ui", "hud", "shader", "pixel-art"]
 categories = ["game-development"]
 
 [dependencies]
-bevy = { version = "0.18", default-features = false, features = [
+bevy = { version = "0.19", default-features = false, features = [
     "bevy_asset",
     "bevy_render",
     "bevy_sprite",
     "bevy_sprite_render",
+    "bevy_ui",
+    "bevy_ui_render",
     "bevy_window",
 ] }
 
 [dev-dependencies]
-bevy = { version = "0.18", default-features = true }
-criterion = "0.5"
+bevy = { version = "0.19", default-features = true }
+criterion = "0.8"
 
 [[bench]]
 name = "segmented"

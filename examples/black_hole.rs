@@ -290,9 +290,9 @@ fn setup(mut commands: Commands) {
         ChildOf(root),
         children![(
             Text::new("Black hole intensity\nLeft-click: decrease    Right-click: increase\nPress 1-9 to set bar pixel_size"),
-            TextFont { font_size: 16.0, ..Default::default() },
+            TextFont { font_size: FontSize::Px(16.0), ..Default::default() },
             TextColor(Color::Srgba(css::WHITE)),
-            TextLayout::new_with_justify(Justify::Center),
+            TextLayout::justify(Justify::Center),
         )],
     ));
 }
