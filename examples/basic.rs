@@ -124,7 +124,7 @@ fn setup(mut commands: Commands) {
     let label_offset = 130.0;
 
     let label_font = TextFont {
-        font_size: 16.0,
+        font_size: FontSize::Px(16.0),
         ..Default::default()
     };
 
@@ -352,7 +352,7 @@ fn setup(mut commands: Commands) {
         "Left-click: decrease     Right-click: increase\nPress 1-9 to set bar pixel_size",
         Vec2::new(0.0, -380.0),
         TextFont {
-            font_size: 18.0,
+            font_size: FontSize::Px(18.0),
             ..Default::default()
         },
         origin_node,
@@ -403,22 +403,22 @@ fn setup(mut commands: Commands) {
             BASE_INNER + RING_COUNT as f32 * RING_THICKNESS + (RING_COUNT - 1) as f32 * GAP;
         let quad_size = (outer_max * 2.0 + 4.0).ceil();
 
-        let palette = [
+        let palette: [_; RING_COUNT] = [
             (css::ORANGE, css::DARK_RED, Srgba::rgb(0.05, 0.02, 0.0)),
             (css::AQUAMARINE, css::CRIMSON, Srgba::rgb(0.0, 0.05, 0.05)),
             (css::VIOLET, css::DARK_RED, Srgba::rgb(0.05, 0.0, 0.05)),
         ];
 
         let mut rings = Vec::with_capacity(RING_COUNT);
-        for i in 0..RING_COUNT {
+        for (i, (fill, follow, background)) in palette.into_iter().enumerate() {
             let mut bar =
                 CircularBar::growing_ring(BASE_INNER + RING_THICKNESS, BASE_INNER, 0.0, TAU)
                     .with_origin(center)
                     .with_margin(1.0)
                     .with_colors(
-                        Color::Srgba(palette[i].0),
-                        Color::Srgba(palette[i].1),
-                        Color::Srgba(palette[i].2),
+                        Color::Srgba(fill),
+                        Color::Srgba(follow),
+                        Color::Srgba(background),
                     );
             // Each ring shares the same UI quad so all three can shift
             // their inner radius outward without clipping.
@@ -462,7 +462,7 @@ fn setup(mut commands: Commands) {
         let outer_max = BAND_BASE + BAND_COUNT as f32 * BAND_THICKNESS;
         let quad_size = (outer_max * 2.0 + 4.0).ceil();
 
-        let band_palette = [
+        let band_palette: [_; BAND_COUNT] = [
             (
                 css::CRIMSON,
                 Srgba::rgb(0.45, 0.05, 0.05),
@@ -484,14 +484,14 @@ fn setup(mut commands: Commands) {
         let n = BAND_COUNT as f32;
 
         let mut stages = Vec::with_capacity(BAND_COUNT);
-        for i in 0..BAND_COUNT {
+        for (i, (fill, follow, _)) in band_palette.into_iter().enumerate() {
             let inner = BAND_BASE + i as f32 * BAND_THICKNESS;
             let outer = inner + BAND_THICKNESS;
             let mut bar = CircularBar::growing_ring(outer, inner, 0.0, TAU)
                 .with_origin(center)
                 .with_colors(
-                    Color::Srgba(band_palette[i].0),
-                    Color::Srgba(band_palette[i].1),
+                    Color::Srgba(fill),
+                    Color::Srgba(follow),
                     Color::Srgba(css::WHITE),
                 );
             // Strip every margin by default; the staged-fill driver
@@ -582,7 +582,7 @@ fn spawn_label(
             Text::new(text),
             font,
             TextColor(Color::Srgba(css::WHITE)),
-            TextLayout::new_with_justify(Justify::Center),
+            TextLayout::justify(Justify::Center),
         )],
     ));
 }

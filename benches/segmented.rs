@@ -1,7 +1,8 @@
 //! Micro-benchmarks for the pure `SegmentedBar` helpers.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use msg_value_bars::prelude::*;
+use std::hint::black_box;
 
 /// Fixed, deterministic set of normalized values covering boundaries,
 /// near-boundary offsets, and mid-slot partials.

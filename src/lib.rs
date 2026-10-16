@@ -266,7 +266,7 @@ pub enum FrameAnchor {
 #[reflect(Component)]
 pub struct CircularBar {
     /// Bar center in logical pixels relative to the UI parent's top-left
-    /// (Y-down). The plugin places a square node of side [`quad_size`]
+    /// (Y-down). The plugin places a square node of side [`quad_size`](Self::quad_size)
     /// centered on this point.
     pub origin: Vec2,
     /// Node side length in logical pixels. Must comfortably enclose the bar's
@@ -586,7 +586,7 @@ fn sync_bar_material(
     )>,
 ) {
     for (bar, value, material_handle, mut node) in &mut bars {
-        if let Some(material) = materials.get_mut(&material_handle.0) {
+        if let Some(mut material) = materials.get_mut(&material_handle.0) {
             material.uniforms = build_uniforms(bar, value);
         }
         let (bb_min, bb_max) = bar.frame_bounds();
